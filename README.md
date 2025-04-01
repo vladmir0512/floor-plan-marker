@@ -1,6 +1,6 @@
 # Floor Plan Marker / Разметчик Планов Помещений
 
-![Floor Plan Marker Screenshot](/screenshot.png) *(optional: add a screenshot later)*
+![Floor Plan Marker Screenshot](/screenshot.png) 
 
 ## English
 
