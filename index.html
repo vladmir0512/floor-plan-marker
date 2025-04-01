@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Floor Plan Marker (SVG)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        #canvas-container {
+            position: relative;
+            display: inline-block;
+            border: 1px solid #ccc;
+        }
+        #imageCanvas {
+            max-width: 100%;
+            cursor: crosshair;
+        }
+        #controls {
+            margin: 10px 0;
+        }
+        #output {
+            margin-top: 20px;
+            white-space: pre-wrap;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+        }
+      .point {
+    position: absolute;
+    width: 8px;  /* Было 10px */
+    height: 8px; /* Было 10px */
+    background: red;
+    border-radius: 50%;
+    transform: translate(-3px, -3px); /* Было -5px, -5px */
+    pointer-events: none;
+}
+     .label {
+    position: absolute;
+    color: red;
+    font-weight: bold;
+    font-size: 12px; /* Добавлено - примерно в 2 раза меньше стандартного */
+    transform: translate(5px, -15px);
+    pointer-events: none;
+}
+        .toggle-container {
+            display: inline-block;
+            margin-left: 15px;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 24px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+        input:checked + .slider:before {
+            transform: translateX(36px);
+        }
+        .toggle-label {
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        #connectionControls {
+            margin-top: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: #f9f9f9;
+        }
+        .connection-line {
+            position: absolute;
+            height: 2px;
+            background-color: blue;
+            transform-origin: 0 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <h1>Floor Plan Marker (SVG)</h1>
+    <p>Загрузите SVG плана этажа, кликайте по дверям/лестницам, сохраните координаты и PNG с метками.</p>
+    
+    <div id="controls">
+        <input type="file" id="imageInput" accept="image/svg+xml">
+        <button id="clearBtn">Очистить</button>
+        <button id="saveBtn">Сохранить TXT</button>
+        <button id="saveImageBtn">Сохранить PNG с метками</button>
+        <div class="toggle-container">
+            <label class="toggle-switch">
+                <input type="checkbox" id="pointTypeToggle">
+                <span class="slider"></span>
+            </label>
+            <span class="toggle-label" id="toggleLabel">Тип точек: Числа</span>
+        </div>
+    </div>
+
+    <div id="connectionControls" style="display: none;">
+        <h3>Создание связей</h3>
+        <p>Выберите первую точку: <span id="firstPointLabel">Не выбрана</span></p>
+        <p>Выберите вторую точку: <span id="secondPointLabel">Не выбрана</span></p>
+        <button id="createConnectionBtn">Создать связь</button>
+        <button id="cancelConnectionBtn">Отмена</button>
+    </div>
+    
+    <div id="canvas-container">
+        <canvas id="imageCanvas"></canvas>
+    </div>
+    
+    <pre id="output">Координаты появятся здесь...</pre>
+    
+    <script>
+        const canvas = document.getElementById('imageCanvas');
+        const ctx = canvas.getContext('2d');
+        const imageInput = document.getElementById('imageInput');
+        const clearBtn = document.getElementById('clearBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const saveImageBtn = document.getElementById('saveImageBtn');
+        const output = document.getElementById('output');
+        const canvasContainer = document.getElementById('canvas-container');
+        const pointTypeToggle = document.getElementById('pointTypeToggle');
+        const toggleLabel = document.getElementById('toggleLabel');
+        const connectionControls = document.getElementById('connectionControls');
+        const firstPointLabel = document.getElementById('firstPointLabel');
+        const secondPointLabel = document.getElementById('secondPointLabel');
+        const createConnectionBtn = document.getElementById('createConnectionBtn');
+        const cancelConnectionBtn = document.getElementById('cancelConnectionBtn');
+        
+        let image = null;
+        let points = [];
+        let normalPointsCounter = 1;
+        let hPointsCounter = 1;
+        let useHPoints = false;
+        let connections = {};
+        let connectionMode = false;
+        let firstPoint = null;
+        let tempLine = null;
+
+        // Toggle point type
+        pointTypeToggle.addEventListener('change', () => {
+            useHPoints = pointTypeToggle.checked;
+            toggleLabel.textContent = useHPoints ? 'Тип точек: H-точки' : 'Тип точек: Числа';
+            updateOutput();
+            redrawMarkers();
+        });
+        
+        // Загрузка SVG изображения
+        imageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const svgData = event.target.result;
+                const img = new Image();
+                
+                img.onload = () => {
+                    // Устанавливаем размеры canvas равными размерам SVG
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Очищаем предыдущие данные
+                    points = [];
+                    normalPointsCounter = 1;
+                    hPointsCounter = 1;
+                    connections = {};
+                    clearMarkers();
+                    clearConnections();
+                    updateOutput();
+                };
+                
+                // Преобразуем SVG в Data URL
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
+            };
+            reader.readAsText(file);
+        });
+        
+        // Клик по холсту для добавления точки
+        canvas.addEventListener('click', (e) => {
+            if (!canvas.width || !canvas.height) return;
+            
+            if (connectionMode) {
+                handleConnectionClick(e);
+                return;
+            }
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+            
+            const pointId = useHPoints ? `H${hPointsCounter++}` : normalPointsCounter++;
+            points.push({ x, y, id: pointId, isHPoint: useHPoints });
+            drawMarker(x, y, pointId);
+            
+            updateOutput();
+        });
+        
+        function handleConnectionClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+            const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+            
+            // Находим ближайшую точку в радиусе 20px
+            const clickedPoint = points.find(p => 
+                Math.abs(p.x - x) < 20 && Math.abs(p.y - y) < 20
+            );
+            
+            if (clickedPoint) {
+                if (!firstPoint) {
+                    firstPoint = clickedPoint.id;
+                    firstPointLabel.textContent = `${clickedPoint.id}: [${clickedPoint.x}, ${clickedPoint.y}]`;
+                    
+                    // Создаем временную линию
+                    tempLine = document.createElement('div');
+                    tempLine.className = 'connection-line';
+                    tempLine.style.background = 'rgba(0,0,255,0.5)';
+                    canvasContainer.appendChild(tempLine);
+                    
+                    // Обновляем временную линию при движении мыши
+                    canvas.addEventListener('mousemove', updateTempLine);
+                } else {
+                    secondPointLabel.textContent = `${clickedPoint.id}: [${clickedPoint.x}, ${clickedPoint.y}]`;
+                }
+            }
+        }
+        
+        function updateTempLine(e) {
+            if (!tempLine || !firstPoint) return;
+            
+            const firstPointObj = points.find(p => p.id === firstPoint);
+            if (!firstPointObj) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+            
+            const x1 = (firstPointObj.x / canvas.width) * rect.width;
+            const y1 = (firstPointObj.y / canvas.height) * rect.height;
+            
+            const length = Math.sqrt(Math.pow(x - x1, 2) + Math.pow(y - y1, 2));
+            const angle = Math.atan2(y - y1, x - x1) * 180 / Math.PI;
+            
+            tempLine.style.width = `${length}px`;
+            tempLine.style.left = `${x1}px`;
+            tempLine.style.top = `${y1}px`;
+            tempLine.style.transform = `rotate(${angle}deg)`;
+        }
+        
+        // Очистка всех точек
+        clearBtn.addEventListener('click', () => {
+            points = [];
+            normalPointsCounter = 1;
+            hPointsCounter = 1;
+            connections = {};
+            clearMarkers();
+            clearConnections();
+            output.textContent = "Координаты появятся здесь...";
+        });
+        
+        // Сохранение координат в TXT
+        saveBtn.addEventListener('click', () => {
+            if (points.length === 0) {
+                alert("Нет точек для сохранения!");
+                return;
+            }
+            
+            const result = {
+                points: {},
+                connections: connections
+            };
+            
+            points.forEach(point => {
+                if (point.isHPoint) {
+                    result.points[point.id] = { path: [[point.x, point.y]] };
+                } else {
+                    result.points[point.id] = { position: [point.x, point.y] };
+                }
+            });
+            
+            const blob = new Blob([JSON.stringify(result, null, 4)], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'coordinates.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+        
+        // Сохранение изображения с метками в PNG
+        saveImageBtn.addEventListener('click', () => {
+            if (!imageInput.files[0] || points.length === 0) {
+                alert("Нет изображения или точек для сохранения!");
+                return;
+            }
+            
+            // Создаем временный холст
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            
+            // Загружаем SVG и рисуем его на временном холсте
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const svgData = e.target.result;
+                const img = new Image();
+                
+                img.onload = () => {
+                    tempCtx.drawImage(img, 0, 0);
+                    
+                    // Рисуем все метки
+                    points.forEach(point => {
+                        drawMarkerOnContext(tempCtx, point.x, point.y, point.id);
+                    });
+                    
+                    // Рисуем все соединения
+                    Object.keys(connections).forEach(sourceId => {
+                        connections[sourceId].forEach(targetId => {
+                            const source = points.find(p => p.id === sourceId);
+                            const target = points.find(p => p.id === targetId);
+                            if (source && target) {
+                                drawConnectionOnContext(tempCtx, source, target);
+                            }
+                        });
+                    });
+                    
+                    // Сохраняем как PNG
+                    const url = tempCanvas.toDataURL('image/png');
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'marked_floor_plan.png';
+                    a.click();
+                };
+                
+                img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
+            };
+            reader.readAsText(imageInput.files[0]);
+        });
+        
+        // Рисует маркер на основном холсте
+        function drawMarker(x, y, id) {
+            const marker = document.createElement('div');
+            marker.className = 'point';
+            marker.style.left = `${(x / canvas.width) * 100}%`;
+            marker.style.top = `${(y / canvas.height) * 100}%`;
+            canvasContainer.appendChild(marker);
+            
+            const label = document.createElement('div');
+            label.className = 'label';
+            label.textContent = id;
+            label.style.left = `${(x / canvas.width) * 100}%`;
+            label.style.top = `${(y / canvas.height) * 100}%`;
+            canvasContainer.appendChild(label);
+        }
+        
+        // Перерисовывает все маркеры
+        function redrawMarkers() {
+            clearMarkers();
+            points.forEach(point => {
+                const xPercent = (point.x / canvas.width) * 100;
+                const yPercent = (point.y / canvas.height) * 100;
+                
+                const marker = document.createElement('div');
+                marker.className = 'point';
+                marker.style.left = `${xPercent}%`;
+                marker.style.top = `${yPercent}%`;
+                canvasContainer.appendChild(marker);
+                
+                const label = document.createElement('div');
+                label.className = 'label';
+                label.textContent = point.id;
+                label.style.left = `${xPercent}%`;
+                label.style.top = `${yPercent}%`;
+                canvasContainer.appendChild(label);
+            });
+        }
+        
+        // Рисует маркер на заданном контексте (для сохранения PNG)
+        function drawMarkerOnContext(context, x, y, id) {
+            context.fillStyle = 'red';
+            context.beginPath();
+            context.arc(x, y, 3, 0, Math.PI * 2);
+            context.fill();
+            
+            context.font = 'bold 12px Arial';
+            context.fillStyle = 'red';
+            context.fillText(id, x + 4, y - 4);
+        }
+        
+        // Рисует соединение на контексте (для сохранения PNG)
+        function drawConnectionOnContext(context, point1, point2) {
+            context.strokeStyle = 'blue';
+            context.lineWidth = 2;
+            context.beginPath();
+            context.moveTo(point1.x, point1.y);
+            context.lineTo(point2.x, point2.y);
+            context.stroke();
+        }
+        
+        // Удаляет все маркеры
+        function clearMarkers() {
+            const markers = document.querySelectorAll('.point, .label');
+            markers.forEach(marker => marker.remove());
+        }
+        
+        // Удаляет все соединения
+        function clearConnections() {
+            const lines = document.querySelectorAll('.connection-line');
+            lines.forEach(line => line.remove());
+        }
+        
+        // Перерисовывает все соединения
+        function redrawConnections() {
+            clearConnections();
+            Object.keys(connections).forEach(sourceId => {
+                connections[sourceId].forEach(targetId => {
+                    drawConnection(sourceId, targetId);
+                });
+            });
+        }
+        
+        // Обновляет текстовый вывод
+        function updateOutput() {
+            const result = {
+                points: {},
+                connections: connections
+            };
+            
+            points.forEach(point => {
+                if (point.isHPoint) {
+                    result.points[point.id] = { path: [[point.x, point.y]] };
+                } else {
+                    result.points[point.id] = { position: [point.x, point.y] };
+                }
+            });
+            
+            output.textContent = JSON.stringify(result, null, 4);
+        }
+        
+        // Режим создания связей
+        function startConnectionMode() {
+            connectionMode = true;
+            connectionControls.style.display = 'block';
+            canvas.style.cursor = 'pointer';
+            document.addEventListener('keydown', handleEscapeKey);
+        }
+
+        function cancelConnectionMode() {
+            connectionMode = false;
+            firstPoint = null;
+            connectionControls.style.display = 'none';
+            canvas.style.cursor = 'crosshair';
+            firstPointLabel.textContent = 'Не выбрана';
+            secondPointLabel.textContent = 'Не выбрана';
+            if (tempLine) {
+                tempLine.remove();
+                tempLine = null;
+            }
+            canvas.removeEventListener('mousemove', updateTempLine);
+            document.removeEventListener('keydown', handleEscapeKey);
+        }
+        
+        function handleEscapeKey(e) {
+            if (e.key === 'Escape') {
+                cancelConnectionMode();
+            }
+        }
+
+        function createConnection() {
+            if (!firstPoint || !secondPointLabel.textContent.includes(':')) return;
+            
+            const secondPointId = secondPointLabel.textContent.split(':')[0].trim();
+            
+            if (!connections[firstPoint]) {
+                connections[firstPoint] = [];
+            }
+            
+            if (!connections[firstPoint].includes(secondPointId)) {
+                connections[firstPoint].push(secondPointId);
+            }
+            
+            // Добавляем обратную связь, если это H-точки
+            if (secondPointId.startsWith('H') && firstPoint.startsWith('H')) {
+                if (!connections[secondPointId]) {
+                    connections[secondPointId] = [];
+                }
+                if (!connections[secondPointId].includes(firstPoint)) {
+                    connections[secondPointId].push(firstPoint);
+                }
+            }
+            
+            drawConnection(firstPoint, secondPointId);
+            cancelConnectionMode();
+            updateOutput();
+        }
+
+        function drawConnection(point1Id, point2Id) {
+            const point1 = points.find(p => p.id === point1Id);
+            const point2 = points.find(p => p.id === point2Id);
+            
+            if (!point1 || !point2) return;
+            
+            const line = document.createElement('div');
+            line.className = 'connection-line';
+            
+            const rect = canvas.getBoundingClientRect();
+            const x1 = (point1.x / canvas.width) * rect.width;
+            const y1 = (point1.y / canvas.height) * rect.height;
+            const x2 = (point2.x / canvas.width) * rect.width;
+            const y2 = (point2.y / canvas.height) * rect.height;
+            
+            const length = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+            const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+            
+            line.style.width = `${length}px`;
+            line.style.left = `${x1}px`;
+            line.style.top = `${y1}px`;
+            line.style.transform = `rotate(${angle}deg)`;
+            
+            line.dataset.point1 = point1Id;
+            line.dataset.point2 = point2Id;
+            
+            canvasContainer.appendChild(line);
+        }
+
+        // Инициализация обработчиков клавиш
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift' && !connectionMode) {
+                startConnectionMode();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift' && connectionMode) {
+                cancelConnectionMode();
+            }
+        });
+        
+        createConnectionBtn.addEventListener('click', createConnection);
+        cancelConnectionBtn.addEventListener('click', cancelConnectionMode);
+    </script>
+</body>
+</html>
